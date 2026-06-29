@@ -1,7 +1,13 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBookDto } from './dto/create-book.dto';
 import { UpdateBookDto } from './dto/update-book.dto';
+import { BooksQueryDto } from './dto/books-query.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class BooksService {
@@ -12,18 +18,48 @@ export class BooksService {
       where: { id: dto.authorId },
     });
 
-   if (!author) {
-      throw new BadRequestException(`Author with id ${dto.authorId} does not exist`);
+    if (!author) {
+      throw new BadRequestException(
+        `Author with id ${dto.authorId} does not exist`,
+      );
     }
 
     return this.prisma.book.create({ data: dto });
   }
 
-  findAll(authorId?: number) {
-    return this.prisma.book.findMany({
-      where: authorId ? { authorId } : undefined,
-      include: { author: true },
-    });
+  findAll(query: BooksQueryDto) {
+    const { page, limit, authorId, search, sort } = query;
+    const skip = (page - 1) * limit;
+
+    const where: Prisma.BookWhereInput = {};
+
+    if (authorId) {
+      where.authorId = authorId;
+    }
+
+    if (search) {
+      where.title = { contains: search, mode: 'insensitive' };
+    }
+
+    const orderBy: Prisma.BookOrderByWithRelationInput = sort
+      ? { priceCents: sort }
+      : undefined;
+
+    return this.prisma
+      .$transaction([
+        this.prisma.book.findMany({
+          where,
+          orderBy,
+          skip,
+          take: limit,
+          include: { author: true },
+        }),
+        this.prisma.book.count({ where }),
+      ])
+      .then(([data, total]) => ({
+        data,
+        meta: { page, limit, total },
+      }));
   }
 
   async findOne(id: number) {
