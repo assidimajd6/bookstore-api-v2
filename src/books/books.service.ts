@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBookDto } from './dto/create-book.dto';
 import { UpdateBookDto } from './dto/update-book.dto';
@@ -12,8 +12,8 @@ export class BooksService {
       where: { id: dto.authorId },
     });
 
-    if (!author) {
-      throw new NotFoundException(`Author with id ${dto.authorId} not found`);
+   if (!author) {
+      throw new BadRequestException(`Author with id ${dto.authorId} does not exist`);
     }
 
     return this.prisma.book.create({ data: dto });
