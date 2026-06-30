@@ -86,5 +86,7 @@ export class BooksService {
     return this.prisma.book.findMany({
       where: { authorId },
     });
-  }
+  }remove(id: number) {
+  return this.prisma.book.delete({ where: { id } });
+}
 }

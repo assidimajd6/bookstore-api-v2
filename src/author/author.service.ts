@@ -21,4 +21,8 @@ export class AuthorService {
       data: dto,
     });
   }
+
+  remove(id: number) {
+    return this.prisma.author.delete({ where: { id } });
+  }
 }

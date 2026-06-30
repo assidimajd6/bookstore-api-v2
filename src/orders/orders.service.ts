@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 
@@ -59,16 +59,24 @@ export class OrdersService {
     });
   }
 
-  async findOne(id: number) {
+  async findOne(id: number, requestUser: { userId: number; role: string }) {
     const order = await this.prisma.order.findUnique({
       where: { id },
       include: {
         items: { include: { book: true } },
+        customer: true,
       },
     });
 
     if (!order) {
       throw new BadRequestException(`Order with id ${id} not found`);
+    }
+
+    const isAdmin = requestUser.role === 'ADMIN';
+    const isOwner = order.customer.userId === requestUser.userId;
+
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException('You do not have permission to view this order');
     }
 
     const totalCents = order.items.reduce(
