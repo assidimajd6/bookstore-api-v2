@@ -1,6 +1,21 @@
-import { Injectable, BadRequestException, ForbiddenException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+  ConflictException,
+} from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateOrderDto } from './dto/create-order.dto';
+import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+
+const TRANSITIONS: Record<string, string[]> = {
+  PENDING:   ['PAID', 'CANCELLED'],
+  PAID:      ['SHIPPED', 'CANCELLED'],
+  SHIPPED:   ['DELIVERED'],
+  DELIVERED: [],
+  CANCELLED: [],
+};
 
 @Injectable()
 export class OrdersService {
@@ -13,7 +28,9 @@ export class OrdersService {
       });
 
       if (!customer) {
-        throw new BadRequestException(`Customer with id ${dto.customerId} does not exist`);
+        throw new BadRequestException(
+          `Customer with id ${dto.customerId} does not exist`,
+        );
       }
 
       const orderItemsData = [];
@@ -24,7 +41,9 @@ export class OrdersService {
         });
 
         if (!book) {
-          throw new BadRequestException(`Book with id ${item.bookId} does not exist`);
+          throw new BadRequestException(
+            `Book with id ${item.bookId} does not exist`,
+          );
         }
 
         if (book.stock < item.quantity) {
@@ -35,7 +54,7 @@ export class OrdersService {
 
         await tx.book.update({
           where: { id: item.bookId },
-          data: { stock: book.stock - item.quantity },
+          data: { stock: { decrement: item.quantity } },
         });
 
         orderItemsData.push({
@@ -48,9 +67,7 @@ export class OrdersService {
       return tx.order.create({
         data: {
           customerId: dto.customerId,
-          items: {
-            create: orderItemsData,
-          },
+          items: { create: orderItemsData },
         },
         include: {
           items: { include: { book: true } },
@@ -59,7 +76,10 @@ export class OrdersService {
     });
   }
 
-  async findOne(id: number, requestUser: { userId: number; role: string }) {
+  async findOne(
+    id: number,
+    requestUser: { userId: number; role: string },
+  ) {
     const order = await this.prisma.order.findUnique({
       where: { id },
       include: {
@@ -69,14 +89,16 @@ export class OrdersService {
     });
 
     if (!order) {
-      throw new BadRequestException(`Order with id ${id} not found`);
+      throw new NotFoundException(`Order with id ${id} not found`);
     }
 
     const isAdmin = requestUser.role === 'ADMIN';
     const isOwner = order.customer.userId === requestUser.userId;
 
     if (!isAdmin && !isOwner) {
-      throw new ForbiddenException('You do not have permission to view this order');
+      throw new ForbiddenException(
+        'You do not have permission to view this order',
+      );
     }
 
     const totalCents = order.items.reduce(
@@ -85,5 +107,74 @@ export class OrdersService {
     );
 
     return { ...order, totalCents };
+  }
+
+  async updateStatus(
+    id: number,
+    dto: UpdateOrderStatusDto,
+    requestUser: { userId: number; role: string },
+  ) {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      include: {
+        items: true,
+        customer: true,
+      },
+    });
+
+    if (!order) {
+      throw new NotFoundException(`Order with id ${id} not found`);
+    }
+
+    const isAdmin = requestUser.role === 'ADMIN';
+    const isOwner = order.customer.userId === requestUser.userId;
+
+    if (!isAdmin && !isOwner) {
+      throw new ForbiddenException(
+        'You do not have permission to update this order',
+      );
+    }
+
+    const allowed = TRANSITIONS[order.status] ?? [];
+
+    if (!allowed.includes(dto.status)) {
+      throw new ConflictException(
+        `Cannot transition order from ${order.status} to ${dto.status}`,
+      );
+    }
+
+    if (dto.status === 'CANCELLED') {
+      return this.prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          await tx.book.update({
+            where: { id: item.bookId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+
+        return tx.order.update({
+          where: { id },
+          data: { status: dto.status },
+          include: { items: { include: { book: true } } },
+        });
+      });
+    }
+
+    return this.prisma.order.update({
+      where: { id },
+      data: { status: dto.status },
+      include: { items: { include: { book: true } } },
+    });
+  }
+
+  async cancel(
+    id: number,
+    requestUser: { userId: number; role: string },
+  ) {
+    return this.updateStatus(
+      id,
+      { status: 'CANCELLED' },
+      requestUser,
+    );
   }
 }
